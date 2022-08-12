@@ -286,7 +286,7 @@ impl Default for NvmeBdevOpts {
             io_queue_requests: 0,
             delay_cmd_submit: true,
             bdev_retry_count: try_from_env("NVME_BDEV_RETRY_COUNT", 0),
-            async_mode: try_from_env("NVME_QPAIR_CONNECT_ASYNC", false),
+            async_mode: try_from_env("NVME_QPAIR_CONNECT_ASYNC", true),
         }
     }
 }
