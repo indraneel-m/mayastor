@@ -301,7 +301,7 @@ impl Default for NvmeBdevOpts {
             reconnect_delay_sec: 0,
             fast_io_fail_timeout_sec: 0,
             disable_auto_failback: false,
-            async_mode: try_from_env("NVME_QPAIR_CONNECT_ASYNC", false),
+            async_mode: try_from_env("NVME_QPAIR_CONNECT_ASYNC", true),
         }
     }
 }
