@@ -19,7 +19,7 @@ use io_engine::{
     grpc,
     logger,
     persistent_store::PersistentStore,
-    subsys::Registration,
+    subsys,
 };
 use version_info::fmt_package_info;
 
@@ -40,6 +40,7 @@ fn start_tokio_runtime(args: &MayastorCliArgs) {
         env::var("HOSTNAME").unwrap_or_else(|_| "mayastor-node".into())
     });
 
+    let endpoint = args.mbus_endpoint.clone();
     let persistent_store_endpoint = args.persistent_store_endpoint.clone();
 
     Mthread::spawn_unaffinitized(move || {
@@ -47,13 +48,22 @@ fn start_tokio_runtime(args: &MayastorCliArgs) {
             let mut futures = Vec::new();
             if let Some(registration_addr) = registration_addr {
                 debug!("mayastor grpc registration init");
-                Registration::init(
+                subsys::registration::Registration::init(
                     &node_name,
                     &grpc_address.to_string(),
                     registration_addr,
                     api_versions.clone(),
                 );
-                futures.push(Registration::run().boxed());
+                futures.push(subsys::registration::Registration::run().boxed());
+            }
+            if let Some(endpoint) = endpoint {
+                debug!("mayastor mbus subsystem init");
+                mbus_api::message_bus_init_tokio(endpoint);
+                subsys::Registration::init(
+                    &node_name,
+                    &grpc_address.to_string(),
+                );
+                futures.push(subsys::Registration::run().boxed());
             }
 
             PersistentStore::init(persistent_store_endpoint).await;

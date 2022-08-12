@@ -6,7 +6,7 @@ pub mod registration_grpc;
 
 use crate::core::MayastorEnvironment;
 use http::Uri;
-use registration_grpc::Registration;
+pub use registration_grpc::Registration;
 use spdk_rs::libspdk::{
     spdk_add_subsystem,
     spdk_subsystem,

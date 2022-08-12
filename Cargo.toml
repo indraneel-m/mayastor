@@ -1,3 +1,7 @@
+[patch.crates-io]
+# Nats with the tcp stream timeout fix: CAS-1192
+nats = { git = "https://github.com/openebs/nats.rs", rev="main_fixes" }
+
 [profile.dev]
 panic = "abort"
 
@@ -8,6 +12,7 @@ members = [
 	"io-engine",
     "io-engine-bench",
 	"rpc/mayastor-api",
+    "mbus-api",
 	"sysfs",
 	"spdk-rs",
 	"utils/io-engine-dependencies/version-info",

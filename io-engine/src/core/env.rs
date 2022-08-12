@@ -104,6 +104,9 @@ pub struct MayastorCliArgs {
     #[structopt(short = "N")]
     /// Name of the node where mayastor is running (ID used by control plane)
     pub node_name: Option<String>,
+    #[structopt(short = "n")]
+    /// Hostname/IP and port (optional) of the message bus server.
+    pub mbus_endpoint: Option<String>,
     /// The maximum amount of hugepage memory we are allowed to allocate in
     /// MiB. A value of 0 means no limit.
     #[structopt(short = "s", parse(try_from_str = parse_mb), default_value = "0")]
@@ -175,6 +178,7 @@ impl Default for MayastorCliArgs {
     fn default() -> Self {
         Self {
             grpc_endpoint: grpc::default_endpoint().to_string(),
+            mbus_endpoint: None,
             persistent_store_endpoint: None,
             node_name: None,
             env_context: None,
@@ -243,6 +247,7 @@ type Result<T, E = EnvError> = std::result::Result<T, E>;
 #[allow(dead_code)]
 pub struct MayastorEnvironment {
     pub node_name: String,
+    pub mbus_endpoint: Option<String>,
     pub grpc_endpoint: Option<std::net::SocketAddr>,
     pub registration_endpoint: Option<Uri>,
     persistent_store_endpoint: Option<String>,
@@ -283,6 +288,7 @@ impl Default for MayastorEnvironment {
     fn default() -> Self {
         Self {
             node_name: "mayastor-node".into(),
+            mbus_endpoint: None,
             grpc_endpoint: None,
             registration_endpoint: None,
             persistent_store_endpoint: None,
@@ -398,6 +404,7 @@ impl MayastorEnvironment {
         Self {
             grpc_endpoint: Some(grpc::endpoint(args.grpc_endpoint)),
             registration_endpoint: args.registration_endpoint,
+            mbus_endpoint: subsys::mbus_endpoint(args.mbus_endpoint),
             persistent_store_endpoint: args.persistent_store_endpoint,
             node_name: args.node_name.unwrap_or_else(|| {
                 env::var("HOSTNAME").unwrap_or_else(|_| "mayastor-node".into())
