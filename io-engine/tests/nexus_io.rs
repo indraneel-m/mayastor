@@ -46,6 +46,7 @@ use common::{
 };
 use io_engine::{
     bdev::nexus::{
+        nexus_lookup,
         ChildState,
         FaultReason,
         NexusNvmePreemption,
@@ -53,8 +54,9 @@ use io_engine::{
         NvmeReservation,
     },
     grpc::v1::nexus::nexus_destroy,
+    persistent_store::PersistentStore,
 };
-use io_engine_tests::compose::rpc::v0::RpcHandle;
+use io_engine_tests::{compose::rpc::v0::RpcHandle, reactor_poll};
 
 extern crate libnvme_rs;
 
@@ -1094,4 +1096,172 @@ async fn nexus_io_write_zeroes() {
                 .expect("read should return block of 0");
         })
         .await;
+}
+
+#[tokio::test]
+/// Create a nexus with a local and a remote replica.
+/// Verify that write-zeroes does actually write zeroes.
+async fn io_race() {
+    common::composer_init();
+
+    let _test = Builder::new()
+        .name("io-race")
+        .add_container_spec(
+            common::compose::ContainerSpec::from_binary(
+                "etcd",
+                Binary::from_path(env!("ETCD_BIN")).with_args(vec![
+                    "--data-dir",
+                    "/tmp/etcd-data",
+                    "--advertise-client-urls",
+                    "http://0.0.0.0:2379",
+                    "--listen-client-urls",
+                    "http://0.0.0.0:2379",
+                ]),
+            )
+            .with_portmap("2379", "2379")
+            .with_portmap("2380", "2380"),
+        )
+        .with_logs(false)
+        .build()
+        .await
+        .unwrap();
+
+    common::delete_file(&[DISKNAME1.into(), DISKNAME2.into()]);
+    common::truncate_file(DISKNAME1, 44 * 1024);
+    common::truncate_file(DISKNAME2, 44 * 1024);
+
+    let mayastor = get_ms();
+    let nexus_name = format!("nexus-{NEXUS_UUID}");
+    let name = nexus_name.clone();
+    let r1 = REPL_UUID;
+    let r2 = "1c7152fd-d2a6-4ee7-8729-2822906d44a4";
+    let r3 = "229bc77c-7422-4a76-940a-e8f2e93d88bf";
+
+    PersistentStore::init(Some("http://localhost:2379".into())).await;
+    mayastor
+        .spawn(async move {
+            // Create local pool and replica
+            let pool1 = Lvs::create_or_import(PoolArgs {
+                name: POOL_NAME.to_string(),
+                disks: vec![BDEVNAME1.to_string()],
+                uuid: None,
+            })
+            .await
+            .unwrap();
+            let pool2 = Lvs::create_or_import(PoolArgs {
+                name: "p2".to_string(),
+                disks: vec![DISKNAME2.to_string()],
+                uuid: None,
+            })
+            .await
+            .unwrap();
+
+            pool1
+                .create_lvol(r1, 32 * 1024 * 1024, Some(r1), true)
+                .await
+                .unwrap();
+
+            pool2
+                .create_lvol(r2, 32 * 1024 * 1024, Some(r2), true)
+                .await
+                .unwrap();
+
+            pool1
+                .create_lvol(r3, 32 * 1024 * 1024, None, false)
+                .await
+                .unwrap();
+
+            // create nexus on local node with 2 children, local and remote
+            nexus_create(
+                &name,
+                32 * 1024 * 1024,
+                Some(NEXUS_UUID),
+                &[
+                    format!("loopback:///{r1}?uuid={r1}"),
+                    format!("loopback:///{r2}?uuid={r2}"),
+                ],
+            )
+            .await
+            .unwrap();
+        })
+        .await;
+
+    // pause etcd..
+    _test.pause("etcd").await.unwrap();
+
+    let name = nexus_name.clone();
+
+    mayastor
+        .spawn(async move {
+            let size_bytes =
+                nexus_lookup(&name).unwrap().size_in_bytes() - 5242880;
+            let size_blks = size_bytes / 512;
+
+            for blk in 0 .. size_blks {
+                let noffset = blk * 512;
+                let offset_repl = noffset + 5242880;
+                let r_blks = offset_repl / 512;
+
+                println!("Writing Nexus @ {noffset}B {blk} blks");
+                match bdev_io::write_some(&name, noffset, 0xae).await {
+                    Err(_) => {
+                        panic!("\n\n\nfailed!!!!\n\n\n");
+                    }
+                    _ => {
+                        println!(
+                            "Reading r1 {r1} @ {offset_repl}B {r_blks} blks"
+                        );
+                        let result_1 =
+                            bdev_io::read_some_safe(r1, offset_repl, 0xae)
+                                .await;
+                        println!(
+                            "Reading r2 {r2} @ {offset_repl}B {r_blks} blks"
+                        );
+                        let result_2 =
+                            bdev_io::read_some_safe(r2, offset_repl, 0xae)
+                                .await;
+
+                        match (result_1, result_2) {
+                            (Ok(false), Ok(true)) => {
+                                panic!("The Nexus IO should not have been successful because ETCD is down!");
+                            }
+                            (Ok(_), Ok(_)) => {}
+                            _ => {
+                                panic!("Does not make sense!");
+                            }
+                        }
+                    }
+                }
+            }
+
+            reactor_poll!(100);
+
+            trace_nexus(&name);
+        })
+        .await;
+}
+
+fn trace_nexus(name: &str) {
+    let nexus = nexus_lookup(&name).unwrap();
+
+    let state = nexus.status();
+    let children = nexus
+        .children()
+        .iter()
+        .map(|c| {
+            let name = c.get_device_name().unwrap_or_default();
+            let state = c.state();
+            serde_json::json!({
+                "name": name,
+                "state": state,
+            })
+        })
+        .collect::<Vec<_>>();
+    let json = serde_json::json!({
+        "name": name,
+        "state": state,
+        "children": children,
+    });
+
+    println!("\n\n{}\n\n", serde_json::to_string_pretty(&json).unwrap());
 }
