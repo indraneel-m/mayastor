@@ -994,11 +994,17 @@ impl BlockDeviceHandle for NvmeDeviceHandle {
         &self,
         _snapshot: SnapshotParams,
     ) -> Result<u64, CoreError> {
+        let payload = self.dma_malloc(128).map_err(|_| {
+            CoreError::DmaAllocationFailed {
+                size:128
+            }
+        })?;
+
         let mut cmd = spdk_nvme_cmd::default();
         cmd.set_opc(nvme_admin_opc::CREATE_SNAPSHOT.into());
         let now = subsys::set_snapshot_time(&mut cmd);
         debug!("Creating snapshot at {}", now);
-        self.nvme_admin(&cmd, None).await?;
+        self.nvme_admin(&cmd, Some(payload)).await?;
         Ok(now)
     }
 

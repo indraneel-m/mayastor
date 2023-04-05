@@ -94,7 +94,11 @@ pub fn set_snapshot_time(cmd: &mut spdk_nvme_cmd) -> u64 {
 /// Called from nvmf_ctrlr_process_admin_cmd
 /// Return: <0 for any error, caller handles it as unsupported opcode
 extern "C" fn nvmf_create_snapshot_hdlr(req: *mut spdk_nvmf_request) -> i32 {
-    debug!("nvmf_create_snapshot_hdlr {:?}", req);
+    info!("############################################");
+    info!("############################################");
+    info!("nvmf_create_snapshot_hdlr {:?}", req);
+    info!("############################################");
+    info!("############################################");
 
     let subsys = unsafe { spdk_nvmf_request_get_subsystem(req) };
     if subsys.is_null() {
@@ -140,9 +144,20 @@ extern "C" fn nvmf_create_snapshot_hdlr(req: *mut spdk_nvmf_request) -> i32 {
         let nvmf_req = NvmfReq(NonNull::new(req).unwrap());
         // Blobfs operations must be on md_thread
         Reactors::master().send_future(async move {
-            lvol.create_snapshot_remote(&nvmf_req, &snapshot_name).await;
+            let snapshot_name = Lvol::format_snapshot_name(&lvol.name(), 0);
+            let snap_param = SnapshotParams::new(
+                Some(lvol.name()),
+                Some(lvol.name()),
+                Some(Uuid::generate().to_string()),
+                Some(snapshot_name),
+            );
+
+            //lvol.create_snapshot_remote(&nvmf_req, &snapshot_name).await;
+            info!("************* CREATING SNAPSHOT  ...");
+            let r = lvol.create_snapshot(snap_param).await;
+            info!("************* SNAPSHOT CREATED: {:?}", r);
         });
-        1 // SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS
+        0 // SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS
     } else {
         debug!("unsupported bdev driver");
         -1
