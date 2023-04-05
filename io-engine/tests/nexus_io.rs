@@ -14,6 +14,7 @@ use io_engine::{
     pool_backend::PoolArgs,
 };
 
+use crossbeam::channel::unbounded;
 use once_cell::sync::OnceCell;
 use std::process::Command;
 
@@ -53,6 +54,7 @@ use io_engine::{
         NexusStatus,
         NvmeReservation,
     },
+    core::Mthread,
     grpc::v1::nexus::nexus_destroy,
     persistent_store::PersistentStore,
 };
@@ -1103,8 +1105,9 @@ async fn nexus_io_write_zeroes() {
 /// Verify that write-zeroes does actually write zeroes.
 async fn io_race() {
     common::composer_init();
+    const ETCD_ENDPOINT: &str = "http://localhost:2379";
 
-    let _test = Builder::new()
+    let test = Builder::new()
         .name("io-race")
         .add_container_spec(
             common::compose::ContainerSpec::from_binary(
@@ -1137,7 +1140,7 @@ async fn io_race() {
     let r2 = "1c7152fd-d2a6-4ee7-8729-2822906d44a4";
     let r3 = "229bc77c-7422-4a76-940a-e8f2e93d88bf";
 
-    PersistentStore::init(Some("http://localhost:2379".into())).await;
+    PersistentStore::init(Some(ETCD_ENDPOINT.to_string())).await;
     mayastor
         .spawn(async move {
             // Create local pool and replica
@@ -1183,62 +1186,125 @@ async fn io_race() {
             )
             .await
             .unwrap();
+
+            nexus_lookup_mut(&name)
+                .unwrap()
+                .share(Protocol::Nvmf, None)
+                .await
+                .unwrap();
+
+            reactor_poll!(600);
         })
         .await;
 
+    let nqn = format!("{HOSTNQN}:nexus-{NEXUS_UUID}");
+    nvme_connect("127.0.0.1", &nqn, true);
+
+    let ns = get_mayastor_nvme_device();
+    tracing::debug!("ns: {ns}");
+
     // pause etcd..
-    _test.pause("etcd").await.unwrap();
+    test.pause("etcd").await.unwrap();
 
     let name = nexus_name.clone();
-
     mayastor
         .spawn(async move {
             let size_bytes =
                 nexus_lookup(&name).unwrap().size_in_bytes() - 5242880;
             let size_blks = size_bytes / 512;
 
-            for blk in 0 .. size_blks {
+            for blk in 0 .. 6143 {
+                let noffset = blk * 512;
+                let offset_repl = noffset + 5242880;
+
+                let start = std::time::Instant::now();
+                println!("Writing Nexus @ {noffset}B {blk} blks");
+                bdev_io::write_some(&name, noffset, 0xae).await.unwrap();
+            }
+        })
+        .await;
+
+    let name = nexus_name.clone();
+    let fail_io = mayastor.spawn(async move {
+        println!("Now the bad IO!");
+
+        let (s, r) = unbounded();
+        Mthread::spawn_unaffinitized(move || {
+            s.send(common::dd_urandom_blkdev_test(&ns))
+        });
+        let dd_result: i32;
+        async fn dummy() {}
+        loop {
+            dummy().await;
+            io_engine::core::Reactors::current().poll_once();
+            if let Ok(r) = r.try_recv() {
+                break r;
+            }
+        }
+    });
+    tokio::pin!(fail_io);
+
+    let timeout = tokio::time::sleep(std::time::Duration::from_secs(3));
+    tokio::select! {
+        _ = timeout => {
+            println!("Timeout!");
+        }
+        mut dd_result = &mut fail_io => {
+            assert_ne!(dd_result, 0, "IOs should be stuck!");
+        }
+    }
+
+    // unpause etcd..
+    test.thaw("etcd").await.unwrap();
+
+    let timeout = tokio::time::sleep(std::time::Duration::from_secs(3));
+    tokio::select! {
+        _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
+            panic!("Should have completed!");
+        }
+        mut n_wr = &mut fail_io => {
+            println!("Success!");
+        }
+    }
+
+    let name = nexus_name.clone();
+    mayastor
+        .spawn(async move {
+            for blk in 6144 .. 6145 {
                 let noffset = blk * 512;
                 let offset_repl = noffset + 5242880;
                 let r_blks = offset_repl / 512;
 
-                println!("Writing Nexus @ {noffset}B {blk} blks");
-                match bdev_io::write_some(&name, noffset, 0xae).await {
-                    Err(_) => {
-                        panic!("\n\n\nfailed!!!!\n\n\n");
-                    }
-                    _ => {
-                        println!(
-                            "Reading r1 {r1} @ {offset_repl}B {r_blks} blks"
-                        );
-                        let result_1 =
-                            bdev_io::read_some_safe(r1, offset_repl, 0xae)
-                                .await;
-                        println!(
-                            "Reading r2 {r2} @ {offset_repl}B {r_blks} blks"
-                        );
-                        let result_2 =
-                            bdev_io::read_some_safe(r2, offset_repl, 0xae)
-                                .await;
+                println!("Reading rr {r2} @ {offset_repl}B {r_blks} blks");
+                bdev_io::read_some(r2, offset_repl, 0xae).await.unwrap();
 
-                        match (result_1, result_2) {
-                            (Ok(false), Ok(true)) => {
-                                panic!("The Nexus IO should not have been successful because ETCD is down!");
-                            }
-                            (Ok(_), Ok(_)) => {}
-                            _ => {
-                                panic!("Does not make sense!");
-                            }
-                        }
-                    }
-                }
+                println!("Reading r1 {r1} @ {offset_repl}B {r_blks} blks");
+                let result_1 = bdev_io::read_some_safe(r1, offset_repl, 0xae)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    result_1, false,
+                    "Should fail because it's failed due to enospc"
+                );
             }
-
-            reactor_poll!(100);
-
-            trace_nexus(&name);
         })
         .await;
+
+    let mut etcd = etcd_client::Client::connect([ETCD_ENDPOINT], None)
+        .await
+        .unwrap();
+    let response = etcd.get(NEXUS_UUID, None).await.expect("No entry found");
+    let value = response.kvs().first().unwrap().value();
+    let nexus_info: io_engine::bdev::NexusInfo =
+        serde_json::from_slice(value).unwrap();
+
+    // Check the persisted nexus info is correct.
+    assert!(!nexus_info.clean_shutdown);
+    let r1 = nexus_info.children.iter().find(|c| c.uuid == r1).unwrap();
+    assert!(!r1.healthy);
+
+    let r2 = nexus_info.children.iter().find(|c| c.uuid == r2).unwrap();
+    assert!(r2.healthy);
 }
 
 fn trace_nexus(name: &str) {
