@@ -43,6 +43,8 @@ use crate::{
         NvmeIoChannel,
         NvmeNamespace,
         NVME_CONTROLLERS,
+        NvmeSnapshotMessage,
+        NvmeSnapshotMessageV1,
     },
     core::{
         mempool::MemoryPool,
@@ -994,17 +996,40 @@ impl BlockDeviceHandle for NvmeDeviceHandle {
         &self,
         _snapshot: SnapshotParams,
     ) -> Result<u64, CoreError> {
-        let payload = self.dma_malloc(128).map_err(|_| {
+        let mut cmd = spdk_nvme_cmd::default();
+        cmd.set_opc(nvme_admin_opc::CREATE_SNAPSHOT.into());
+        let now = subsys::set_snapshot_time(&mut cmd);
+
+        cmd.cdw12 = 0x11223344u32;
+
+        let msgv1 = NvmeSnapshotMessageV1::new(
+            "TXNID1".to_string(),
+            "PARENTID".to_string(),
+            "ENTITYID".to_string(),
+            "NAMEZ".to_string(),
+        );
+
+        let msg = NvmeSnapshotMessage::V1(msgv1);
+        let encoded_msg = bincode::serialize(&msg)
+            .expect("Failed to serialize snapshot message");
+
+        let mut payload = self.dma_malloc(encoded_msg.len() as u64).map_err(|_| {
             CoreError::DmaAllocationFailed {
                 size:128
             }
         })?;
 
-        let mut cmd = spdk_nvme_cmd::default();
-        cmd.set_opc(nvme_admin_opc::CREATE_SNAPSHOT.into());
-        let now = subsys::set_snapshot_time(&mut cmd);
-        debug!("Creating snapshot at {}", now);
-        self.nvme_admin(&cmd, Some(payload)).await?;
+        debug!(
+            "[!!!!!] Creating snapshot at {}, len = {}, DMA LEN: {}",
+            now,
+            encoded_msg.len(),
+            payload.len(),
+        );
+
+        payload.as_mut_slice().clone_from_slice(encoded_msg.as_slice());
+
+        self.nvme_admin(&cmd, Some(&mut payload)).await?;
+        //self.nvme_admin(&cmd, None).await?;
         Ok(now)
     }
 

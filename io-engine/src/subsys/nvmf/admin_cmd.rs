@@ -17,7 +17,9 @@ use crate::{
         SnapshotParams,
     },
     lvs::{lvs_lvol::LvsLvol, Lvol},
+    bdev::nvmx::{NvmeSnapshotMessage, NvmeSnapshotMessageV1},
 };
+
 use spdk_rs::{
     libspdk::{
         nvme_cmd_cdw10_get,
@@ -35,6 +37,7 @@ use spdk_rs::{
         spdk_nvmf_bdev_ctrlr_nvme_passthru_admin,
         spdk_nvmf_request,
         spdk_nvmf_request_get_bdev,
+        spdk_nvmf_request_get_data,
         spdk_nvmf_request_get_cmd,
         spdk_nvmf_request_get_response,
         spdk_nvmf_request_get_subsystem,
@@ -90,16 +93,58 @@ pub fn set_snapshot_time(cmd: &mut spdk_nvme_cmd) -> u64 {
     now
 }
 
-/// NVMf custom command handler for opcode c0h
+/// Decode snapshot information from incoming NVMe admin command data.
+fn decode_snapshot_params(req: *mut spdk_nvmf_request) -> Option<SnapshotParams> {
+    let encoded_msg = unsafe {
+        let mut val = std::ptr::null_mut();
+        let mut size: u32 = 0;
+
+        spdk_nvmf_request_get_data(
+            req,
+            &mut val as *mut *mut c_void,
+            &mut size as *mut u32
+        );
+
+        info!(
+            "## length = {}, iov_cnt = {}, size = {}",
+            (*req).length,
+            (*req).iovcnt,
+            size,
+        );
+    
+        std::slice::from_raw_parts(val as *const u8, size as usize)
+    };
+
+    // Decode versioned snapshot creation request.
+    let decoded_msg = match bincode::deserialize::<NvmeSnapshotMessage>(encoded_msg) {
+        Err(e) => {
+            error!(
+                "Failed to deserialize snapshot creation message: {}",
+                e
+            );
+            return None
+        },
+        Ok(msg) => msg,
+    };
+
+    let snapshot_params = match decoded_msg {
+        NvmeSnapshotMessage::V1(v1) => {
+            SnapshotParams::new(
+                Some(v1.entity_id().to_owned()),
+                Some(v1.parent_id().to_owned()),
+                Some(v1.txn_id().to_owned()),
+                Some(v1.name().to_owned()),
+            )
+        }
+    };
+
+    Some(snapshot_params)
+}
+
+/// NVMf custom command handler for opcode c1h
 /// Called from nvmf_ctrlr_process_admin_cmd
 /// Return: <0 for any error, caller handles it as unsupported opcode
 extern "C" fn nvmf_create_snapshot_hdlr(req: *mut spdk_nvmf_request) -> i32 {
-    info!("############################################");
-    info!("############################################");
-    info!("nvmf_create_snapshot_hdlr {:?}", req);
-    info!("############################################");
-    info!("############################################");
-
     let subsys = unsafe { spdk_nvmf_request_get_subsystem(req) };
     if subsys.is_null() {
         debug!("subsystem is null");
@@ -111,6 +156,18 @@ extern "C" fn nvmf_create_snapshot_hdlr(req: *mut spdk_nvmf_request) -> i32 {
         debug!("multiple namespaces");
         return -1;
     }
+
+    /* Get snapshot parameters from NVMe request */
+    let snapshot_params = match decode_snapshot_params(req) {
+        None => return -1,
+        Some(v) => v,
+    };
+
+    info!("###########################");
+    info!("{:?}", snapshot_params);
+    info!("###########################");
+
+    panic!("Beeee");
 
     /* Forward to first namespace if it supports NVME admin commands */
     let mut bdev: *mut spdk_bdev = std::ptr::null_mut();

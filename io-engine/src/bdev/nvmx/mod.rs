@@ -9,6 +9,7 @@ pub use controller_state::NvmeControllerState;
 pub use device::{lookup_by_name, open_by_name, NvmeBlockDevice};
 pub use handle::{nvme_io_ctx_pool_init, NvmeDeviceHandle};
 pub use namespace::NvmeNamespace;
+pub use snapshot::{NvmeSnapshotMessage, NvmeSnapshotMessageV1};
 pub(crate) use uri::NvmfDeviceTemplate;
 
 use crate::{
@@ -25,6 +26,7 @@ mod handle;
 mod namespace;
 mod uri;
 pub mod utils;
+mod snapshot;
 
 #[derive(Debug)]
 #[allow(clippy::upper_case_acronyms)]
