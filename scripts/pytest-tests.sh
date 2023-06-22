@@ -18,7 +18,8 @@ function run_tests()
     then
     (
       set -x
-      python -m pytest --tc-file='test_config.ini' --docker-compose="$name" "$name"
+      base=$(dirname "$name")
+      python -m pytest --tc-file='test_config.ini' --docker-compose="$base" "$name" -svv
     )
     fi
   done
@@ -48,6 +49,7 @@ tests/replica_uuid
 
 tests/nexus_multipath
 tests/nexus
+tests/nexus/test_multi_nexus_ka.py
 
 v1/pool
 v1/replica
