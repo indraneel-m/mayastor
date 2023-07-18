@@ -278,9 +278,9 @@ impl Default for NvmeBdevOpts {
     fn default() -> Self {
         Self {
             action_on_timeout: 4,
-            timeout_us: try_from_env("NVME_TIMEOUT_US", 5_000_000),
-            timeout_admin_us: try_from_env("NVME_TIMEOUT_ADMIN_US", 5_000_000),
-            keep_alive_timeout_ms: try_from_env("NVME_KATO_MS", 1_000),
+            timeout_us: try_from_env("NVME_TIMEOUT_US", 30_000_000),
+            timeout_admin_us: try_from_env("NVME_TIMEOUT_ADMIN_US", 30_000_000),
+            keep_alive_timeout_ms: try_from_env("NVME_KATO_MS", 10_000),
             transport_retry_count: try_from_env("NVME_RETRY_COUNT", 0),
             arbitration_burst: 0,
             low_priority_weight: 0,
