@@ -97,7 +97,7 @@ let
     configureFlags = (if (targetPlatform.config == "x86_64-unknown-linux-gnu") then
       [
         "--target-arch=nehalem"
-        "--with-crypto"
+        "--without-crypto"
       ]
     else if (targetPlatform.config == "aarch64-unknown-linux-gnu") then
       [
@@ -160,7 +160,7 @@ let
       install -v dpdk/build/lib/*.a              $out/lib/
       install -v dpdk/build/lib/pkgconfig/*.pc   $out/lib/pkgconfig/
     '' + lib.optionalString targetPlatform.isx86_64 ''
-      install -v intel-ipsec-mb/lib/*.a          $out/lib/
+#      install -v intel-ipsec-mb/lib/*.a          $out/lib/
 
       # fix paths in pkg config files
       build_dir=`pwd`

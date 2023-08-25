@@ -58,7 +58,7 @@ impl TryFrom<&Url> for Aio {
                     value: value.clone(),
                 })?
             }
-            None => 512,
+            None => 4096,
         };
 
         let uuid = uri::uuid(parameters.remove("uuid")).context(
