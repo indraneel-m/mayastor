@@ -4,7 +4,7 @@
 	branch = release/2.2
 [submodule "spdk-rs"]
 	path = spdk-rs
-	url = https://github.com/openebs/spdk-rs
+	url = https://github.com/indraneel-m/spdk-rs
 	branch = release/2.2
 [submodule "utils/io-engine-dependencies"]
 	path = utils/io-engine-dependencies
